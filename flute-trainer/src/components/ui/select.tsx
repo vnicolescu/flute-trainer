@@ -1,18 +1,19 @@
-import React, { useState } from 'react';
+import { Children, isValidElement, cloneElement, useState } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 
 interface SelectProps {
   value: string;
   onValueChange: (value: string) => void;
-  children: React.ReactNode;
+  children: ReactNode;
 }
 
 interface SelectContentProps {
-  children: React.ReactNode;
+  children: ReactNode;
 }
 
 interface SelectItemProps {
   value: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }
 
 export function Select({ value, onValueChange, children }: SelectProps) {
@@ -40,14 +41,15 @@ export function Select({ value, onValueChange, children }: SelectProps) {
       </button>
       {isOpen && (
         <div className="absolute top-full left-0 z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md animate-in">
-          {React.Children.map(children, (child) => {
-            if (React.isValidElement(child) && child.type === SelectContent) {
-              return React.cloneElement(child as React.ReactElement<any>, {
-                onSelect: (itemValue: string) => {
-                  onValueChange(itemValue);
-                  setIsOpen(false);
-                }
-              });
+          {Children.map(children, (child) => {
+              if (isValidElement(child) && child.type === SelectContent) {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                return cloneElement(child as ReactElement<any>, {
+                  onSelect: (itemValue: string) => {
+                    onValueChange(itemValue);
+                    setIsOpen(false);
+                  }
+                });
             }
             return child;
           })}
@@ -60,9 +62,10 @@ export function Select({ value, onValueChange, children }: SelectProps) {
 export function SelectContent({ children, onSelect }: SelectContentProps & { onSelect?: (value: string) => void }) {
   return (
     <>
-      {React.Children.map(children, (child) => {
-        if (React.isValidElement(child) && child.type === SelectItem) {
-          return React.cloneElement(child as React.ReactElement<any>, { onSelect });
+      {Children.map(children, (child) => {
+        if (isValidElement(child) && child.type === SelectItem) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return cloneElement(child as ReactElement<any>, { onSelect });
         }
         return child;
       })}
