@@ -1,14 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { PitchDetector } from "pitchy";
 import * as Pitchfinder from "pitchfinder";
-
-// Make the webaudiofont player and types available
-declare var WebAudioFontPlayer: any;
-declare var _tone_0770_SBLive_sf2: any;
 
 // New, more detailed fingering data based on a standard flute chart.
 // Each key is represented by a property. `true` means the key is pressed.
@@ -73,9 +68,9 @@ function FluteDiagram({ note, showFingering }: { note: string; showFingering: bo
   };
 
   return (
-    <div className="flex items-center justify-center gap-8">
+    <div className="flex items-center justify-center gap-4 md:gap-8 flex-wrap">
       {/* Musical Staff */}
-      <svg viewBox="0 0 100 120" className="h-32">
+      <svg viewBox="0 0 100 120" className="h-24 md:h-32">
         <g stroke="rgb(156 163 175)" strokeWidth="1">
             <path d="M 10 54 H 90" />
             <path d="M 10 60 H 90" />
@@ -89,7 +84,7 @@ function FluteDiagram({ note, showFingering }: { note: string; showFingering: bo
         {yPos && <circle cx="50" cy={yPos} r="5.5" fill="white" />}
       </svg>
       {/* Fingering Diagram */}
-      <svg viewBox="0 0 300 100" className="h-24 w-auto">
+      <svg viewBox="0 0 300 100" className="h-20 md:h-24 w-auto">
         {/* Flute Body */}
         <rect x="10" y="40" width="280" height="20" rx="4" ry="4" fill="rgb(209 213 219)" />
 
@@ -123,137 +118,91 @@ interface UseAudioEngineProps {
 function useAudioEngine({ enabled, targetNote, onPitchMatch }: UseAudioEngineProps) {
   const [pitchStatus, setPitchStatus] = useState<"idle" | "listening" | "matched">("idle");
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const playerRef = useRef<any>(null);
-  const fluteRef = useRef<any>(null);
 
-  // Initialize AudioContext and WebAudioFont player
+  // Pitch detection logic
   useEffect(() => {
-    const AudioContextFunc = window.AudioContext || (window as any).webkitAudioContext;
-    if (!audioCtxRef.current) {
-      const ctx = new AudioContextFunc();
-      audioCtxRef.current = ctx;
-      playerRef.current = new WebAudioFontPlayer();
-
-      // Load the flute soundfont
-      playerRef.current.loader.decodeAfterLoading(ctx, '_tone_0770_SBLive_sf2');
-      fluteRef.current = _tone_0770_SBLive_sf2;
+    if (!enabled || !targetNote) {
+        setPitchStatus("idle");
+        return;
     }
-
-    // Resume context on user interaction
-    const resumeAudio = () => {
-      if (audioCtxRef.current?.state === 'suspended') {
-        audioCtxRef.current?.resume();
-      }
-      window.removeEventListener('click', resumeAudio);
-    };
-    window.addEventListener('click', resumeAudio);
-
-    return () => {
-      window.removeEventListener('click', resumeAudio);
-    }
-  }, []);
-
-  // Play reference tone
-  useEffect(() => {
-    if (!enabled || !targetNote || !audioCtxRef.current || !playerRef.current || !fluteRef.current) return;
-
-    const midiPitch = NOTE_MIDI[targetNote];
-    if (midiPitch === undefined) return;
-
-    playerRef.current.queueWaveTable(
-      audioCtxRef.current,
-      audioCtxRef.current.destination,
-      fluteRef.current,
-      0,
-      midiPitch,
-      1.5 // duration in seconds
-    );
-
-  }, [enabled, targetNote]);
-
-  // Pitch detection logic (remains the same)
-  useEffect(() => {
-    if (!enabled || !targetNote) return;
 
     let stream: MediaStream | null = null;
     let analyser: AnalyserNode | null = null;
     let rafId: number;
+    let localAudioCtx: AudioContext;
+
 
     async function setup() {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        audioCtxRef.current = ctx;
+        if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+            const AudioContextFunc = window.AudioContext || (window as any).webkitAudioContext;
+            audioCtxRef.current = new AudioContextFunc();
+        }
+        localAudioCtx = audioCtxRef.current;
 
-        const source = ctx.createMediaStreamSource(stream);
-        analyser = ctx.createAnalyser();
+        await localAudioCtx.resume();
+
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        const source = localAudioCtx.createMediaStreamSource(stream);
+        analyser = localAudioCtx.createAnalyser();
         analyser.fftSize = 2048;
         source.connect(analyser);
 
-        // Create both pitch detectors
         const pitchDetectorRef = PitchDetector.forFloat32Array(analyser.fftSize);
-        const yinDetectorRef = Pitchfinder.YIN({ sampleRate: ctx.sampleRate, threshold: 0.1 });
-
         const buffer = new Float32Array(analyser.fftSize);
         setPitchStatus("listening");
 
+        let consecutiveMatches = 0;
+
         function detect() {
-          if (!analyser || !pitchDetectorRef || !yinDetectorRef) return;
+          if (!analyser || !pitchDetectorRef) return;
           analyser.getFloatTimeDomainData(buffer);
 
-          // Try pitchy first (more accurate)
-          const [pitchyFreq, clarity] = pitchDetectorRef.findPitch(buffer, ctx.sampleRate);
-
-          // Try YIN as backup (better for whistling/voice)
-          const yinFreq = yinDetectorRef(buffer);
-
-          // Use whichever detection method found a result
-          let detectedPitch = null;
-          if (pitchyFreq && clarity > 0.3) {
-            detectedPitch = pitchyFreq;
-          } else if (yinFreq && yinFreq > 80 && yinFreq < 2000) {
-            detectedPitch = yinFreq;
+          const rms = Math.sqrt(buffer.reduce((s, v) => s + v * v, 0) / buffer.length);
+          if (rms < 0.01) { // Ignore quiet sounds
+            rafId = requestAnimationFrame(detect);
+            return;
           }
 
-          // Check if detected pitch matches target (more lenient for whistling)
-          if (detectedPitch && targetNote) {
+          const [pitch, clarity] = pitchDetectorRef.findPitch(buffer, localAudioCtx.sampleRate);
+
+          if (clarity > 0.95 && pitch && targetNote) { // Stricter clarity
             const freqTarget = noteToFreq(targetNote);
-            const cents = 1200 * Math.log2(detectedPitch / freqTarget);
-            if (Math.abs(cents) < 50) { // More lenient: 50 cents instead of 30
-              setPitchStatus("matched");
-              onPitchMatch && onPitchMatch();
+            const cents = 1200 * Math.log2(pitch / freqTarget);
+            if (Math.abs(cents) < 30) {
+              consecutiveMatches++;
+            } else {
+              consecutiveMatches = 0;
             }
+          } else {
+            consecutiveMatches = 0;
           }
-          rafId = requestAnimationFrame(detect);
+
+          if (consecutiveMatches > 3) { // Require 3 stable matches
+            setPitchStatus("matched");
+            onPitchMatch && onPitchMatch();
+            // Stop detection after match
+            if(stream) stream.getTracks().forEach((t) => t.stop());
+            if(analyser) analyser.disconnect();
+            cancelAnimationFrame(rafId);
+          } else {
+            rafId = requestAnimationFrame(detect);
+          }
         }
         detect();
       } catch (e) {
         console.error("Audio setup error:", e);
+        setPitchStatus("idle");
       }
     }
 
-    if (audioCtxRef.current?.state === "running") {
-      setup();
-    } else {
-      // Wait for the audio context to be running
-      const resumeAndSetup = () => {
-        if (audioCtxRef.current?.state === 'suspended') {
-          audioCtxRef.current.resume().then(setup);
-        } else {
-          setup();
-        }
-        window.removeEventListener('click', resumeAndSetup);
-      };
-      window.addEventListener('click', resumeAndSetup);
-    }
+    setup();
 
     return () => {
       cancelAnimationFrame(rafId);
       if (analyser) analyser.disconnect();
       if (stream) stream.getTracks().forEach((t) => t.stop());
-      if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
-        // Don't close the context here, as it's shared
-      }
       setPitchStatus("idle");
     };
   }, [enabled, targetNote, onPitchMatch]);
@@ -261,14 +210,14 @@ function useAudioEngine({ enabled, targetNote, onPitchMatch }: UseAudioEnginePro
   return pitchStatus;
 }
 
+
 interface SequencerProps {
   length: number;
   running: boolean;
   onComplete?: () => void;
-  revealNext: () => void;
 }
 
-function Sequencer({ length, running, onComplete, revealNext }: SequencerProps) {
+function Sequencer({ length, running, onComplete }: SequencerProps) {
   const [queue, setQueue] = useState<string[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showFingering, setShowFingering] = useState(true);
@@ -280,53 +229,54 @@ function Sequencer({ length, running, onComplete, revealNext }: SequencerProps) 
     setCurrentIndex(0);
   }, [length, running]);
 
-  function handlePitchMatched() {
-    if (currentIndex + 1 === queue.length) {
-      onComplete && onComplete();
+  function handleNextNote() {
+    if (currentIndex + 1 >= queue.length) {
+        onComplete && onComplete();
     } else {
-      setCurrentIndex((i) => i + 1);
-      revealNext();
+        setCurrentIndex((i) => i + 1);
     }
   }
 
   const currentNote = queue[currentIndex];
   const pitchStatus = useAudioEngine({
-    enabled: running,
+    enabled: running && !!currentNote,
     targetNote: currentNote,
-    onPitchMatch: handlePitchMatched
+    onPitchMatch: () => {
+        setTimeout(handleNextNote, 500); // Give user feedback time
+    }
   });
 
   const noteColor = currentNote ? NOTE_COLORS[currentNote] : "rgb(156 163 175)";
 
   return (
-    <div className="flex flex-col items-center justify-around h-full w-full gap-4 text-center">
-      {/* Huge note display */}
+    <div className="flex flex-col items-center justify-between h-full w-full gap-4 text-center p-2">
       <div
-        className="font-bold font-serif tracking-tighter drop-shadow-lg select-none flex items-center justify-center"
+        className="font-bold font-serif tracking-tighter drop-shadow-lg select-none flex items-center justify-center w-full"
         style={{
-          fontSize: 'min(40vh, 30vw)',
+          fontSize: 'clamp(4rem, 20vmax, 10rem)',
           color: noteColor,
           lineHeight: '1',
-          textShadow: `0 0 50px ${noteColor}70`,
+          textShadow: `0 0 30px ${noteColor}50`,
         }}
       >
-        {currentNote}
+        {currentNote || "..."}
       </div>
 
-      {/* Fingering diagram and controls */}
-      <div className="flex flex-col items-center gap-4">
+      <div className="flex flex-col items-center gap-2 w-full">
         <FluteDiagram note={currentNote} showFingering={showFingering} />
-        <div className="flex items-center gap-2 mt-4">
+        <div className="flex items-center gap-2 mt-2">
           <span className="text-sm">Show fingering</span>
           <Switch checked={showFingering} onCheckedChange={setShowFingering} />
         </div>
-        <div className="text-lg font-semibold text-gray-400 mt-2">
+        <div className="text-lg font-semibold text-gray-400 h-8 mt-2">
           {pitchStatus === 'matched'
-            ? '🎉 Perfect! Great job!'
-            : 'Play the note to continue...'}
+            ? '🎉 Perfect!'
+            : pitchStatus === 'listening'
+            ? 'Play the note...'
+            : ''}
         </div>
-        <Button onClick={handlePitchMatched} className="mt-4">
-          Next Note
+        <Button onClick={handleNextNote} className="mt-2">
+          Skip Note
         </Button>
       </div>
     </div>
@@ -336,22 +286,19 @@ function Sequencer({ length, running, onComplete, revealNext }: SequencerProps) 
 export default function FluteTrainerApp() {
   const [seqLen, setSeqLen] = useState(1);
   const [running, setRunning] = useState(false);
-  const [message, setMessage] = useState("Choose a length and press Start");
 
   function handleStart() {
-    setMessage("Listen and play the sequence…");
     setRunning(true);
   }
   function handleComplete() {
-    setMessage("Sequence complete! ✨ Press Start for another.");
     setRunning(false);
   }
 
   return (
-    <div className="min-h-screen bg-[#111827] text-white flex flex-col items-center p-4 font-sans">
-      <header className="w-full max-w-md flex-shrink-0">
-        <h1 className="text-4xl font-bold font-serif">Flute Trainer</h1>
-        <div className="flex items-center gap-4">
+    <div className="h-screen overflow-hidden bg-[#111827] text-white flex flex-col items-center p-4 font-sans">
+      <header className="w-full max-w-md flex-shrink-0 mb-4">
+        <h1 className="text-4xl font-bold font-serif text-center mb-2">Flute Trainer</h1>
+        <div className="flex items-center justify-center gap-4">
           <Select
             value={String(seqLen)}
             onValueChange={(v: string) => setSeqLen(Number(v))}
@@ -364,30 +311,29 @@ export default function FluteTrainerApp() {
               ))}
             </SelectContent>
           </Select>
-          <Button onClick={handleStart} disabled={running}>
-            Start
+          <Button onClick={running ? handleComplete : handleStart} disabled={running}>
+            {running ? "Stop" : "Start"}
           </Button>
         </div>
       </header>
 
-      <main className="flex-grow w-full flex flex-col items-center justify-center py-4">
+      <main className="flex-grow w-full max-w-4xl flex flex-col items-center justify-center">
         {running ? (
           <Sequencer
             length={seqLen}
             running={running}
             onComplete={handleComplete}
-            revealNext={() => {}}
           />
         ) : (
           <div className="text-center text-gray-400">
-            <p>{message}</p>
+            <p>Choose a sequence length and press Start.</p>
           </div>
         )}
       </main>
 
       <footer className="w-full text-center py-2 flex-shrink-0">
         <p className="text-xs text-gray-500">
-          Made with 🪈 + React + Web Audio API – prototype v0.1
+          Made with 🪈 + React + Web Audio API
         </p>
       </footer>
     </div>
