@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { PitchDetector } from "pitchy";
-import * as Pitchfinder from "pitchfinder";
 
 // New, more detailed fingering data based on a standard flute chart.
 // Each key is represented by a property. `true` means the key is pressed.
@@ -58,7 +57,16 @@ function FluteDiagram({ note, showFingering }: { note: string; showFingering: bo
   const noteColor = NOTE_COLORS[note] || "rgb(156 163 175)";
   const yPos = NOTE_STAFF_POSITIONS[note] || 0;
 
-  const Key = ({ x, y, width, height, isPressed, shape = 'circle' }: any) => {
+  interface KeyProps {
+    x: number;
+    y: number;
+    width: number;
+    height?: number;
+    isPressed: boolean;
+    shape?: 'circle' | 'rect';
+  }
+
+  const Key = ({ x, y, width, height = width, isPressed, shape = 'circle' }: KeyProps) => {
     const fill = showFingering && isPressed ? noteColor : "none";
     const stroke = showFingering && isPressed ? noteColor : "rgb(107 114 128)";
     if (shape === 'rect') {
@@ -135,7 +143,9 @@ function useAudioEngine({ enabled, targetNote, onPitchMatch }: UseAudioEnginePro
     async function setup() {
       try {
         if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
-            const AudioContextFunc = window.AudioContext || (window as any).webkitAudioContext;
+            const AudioContextFunc =
+              window.AudioContext ||
+              (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
             audioCtxRef.current = new AudioContextFunc();
         }
         localAudioCtx = audioCtxRef.current;
@@ -181,7 +191,9 @@ function useAudioEngine({ enabled, targetNote, onPitchMatch }: UseAudioEnginePro
 
           if (consecutiveMatches > 3) { // Require 3 stable matches
             setPitchStatus("matched");
-            onPitchMatch && onPitchMatch();
+            if (onPitchMatch) {
+              onPitchMatch();
+            }
             // Stop detection after match
             if(stream) stream.getTracks().forEach((t) => t.stop());
             if(analyser) analyser.disconnect();
@@ -231,7 +243,9 @@ function Sequencer({ length, running, onComplete }: SequencerProps) {
 
   function handleNextNote() {
     if (currentIndex + 1 >= queue.length) {
-        onComplete && onComplete();
+        if (onComplete) {
+          onComplete();
+        }
     } else {
         setCurrentIndex((i) => i + 1);
     }
